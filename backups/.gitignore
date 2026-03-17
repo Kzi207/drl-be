@@ -1,0 +1,3 @@
+# Backup files - do not commit
+*.sql
+.last_backup

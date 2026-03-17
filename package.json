@@ -1,0 +1,33 @@
+{
+  "name": "kzi-attendance-be",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Backend API and database tools",
+  "main": "server-mysql.ts",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:watch": "tsc -p tsconfig.json --noEmit --watch",
+    "dev": "node -r ./ts-register.js server-mysql.ts",
+    "start": "node -r ./ts-register.js server-mysql.ts",
+    "server": "node -r ./ts-register.js server-mysql.ts",
+    "build:db": "node -r ./ts-register.js database/auto-migrate.ts",
+    "migrate": "node -r ./ts-register.js database/migrate.ts",
+    "migrate:safe": "node -r ./ts-register.js database/migrate-safe.ts",
+    "backup": "node -r ./ts-register.js database/backup.ts now",
+    "backup:list": "node -r ./ts-register.js database/backup.ts list",
+    "backup:restore": "node -r ./ts-register.js database/backup.ts restore"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.18.2",
+    "mysql2": "^3.9.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.11.19",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.2.2"
+  }
+}
