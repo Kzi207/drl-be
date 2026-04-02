@@ -12,7 +12,7 @@ import * as db from './database/db';
 import { autoBackup, scheduleBackup, performBackup, restoreBackup, listBackups, BACKUP_DIR, listGoogleSheetBackups, restoreFromGoogleSheet, backupToGoogleSheet } from './database/backup';
 
 const PORT = parseInt(process.env.PORT || '3004');
-const API_KEY = process.env.API_KEY || 'kzi207-khoaktck-cncd2511';
+const API_KEY = process.env.API_KEY || '';
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123456';
@@ -713,6 +713,36 @@ router.get('/delimg', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// --- XÓA ẢNH MINH CHỨNG (DELETE PROOF API) ---
+router.post('/api/delete-proof', async (req, res, next) => {
+  try {
+    const { tk_sv, muc_danh_gia } = req.body;
+
+    if (!tk_sv || !muc_danh_gia) {
+      return res.status(400).json({ error: 'Thiếu thông tin' });
+    }
+
+    const safeId = String(tk_sv).replace(/[^a-zA-Z0-9]/g, '');
+    const safeCat = String(muc_danh_gia).replace(/\./g, '-').replace(/[^a-zA-Z0-9\-]/g, '');
+    const prefix = `${safeId}_${safeCat}_`;
+
+    // Xóa khỏi hệ thống file
+    const files = fs.readdirSync(UPLOAD_DIR);
+    files.filter(f => f.startsWith(prefix)).forEach(f => {
+      fs.unlinkSync(path.join(UPLOAD_DIR, f));
+    });
+
+    // Xóa khỏi cơ sở dữ liệu (tương thích cả category dạng III.1 và III-1)
+    const rawCat = String(muc_danh_gia);
+    await db.Q(
+      'DELETE FROM file_uploads WHERE student_id=? AND (category=? OR category=?)',
+      [safeId, rawCat, safeCat]
+    );
+
+    res.json({ success: true });
+  } catch (error) { next(error); }
+});
+
 // --- LẤY ẢNH MINH CHỨNG ---
 router.get('/api/get-proof', async (req, res, next) => {
   try {
@@ -874,6 +904,41 @@ router.get('/admin-api/proof-uploads', authenticateAdmin, async (req, res, next)
       count: Array.isArray(rows) ? rows.length : 0,
       data: rows
     });
+  } catch (error) { next(error); }
+});
+
+// --- XÓA TẤT CẢ MINH CHỨNG (ADMIN) ---
+router.delete('/admin-api/proofs/delete-all', authenticateAdmin, async (req, res, next) => {
+  try {
+    const UPLOAD_DIR = path.join(__dirname, '..', 'data', 'uploads');
+    
+    let deletedCount = 0;
+
+    // Kiểm tra và tạo thư mục nếu chưa tồn tại
+    if (!fs.existsSync(UPLOAD_DIR)) {
+      fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+    } else {
+      // Xóa tất cả file từ hệ thống file
+      const files = fs.readdirSync(UPLOAD_DIR);
+      files.forEach(f => {
+        try {
+          const filePath = path.join(UPLOAD_DIR, f);
+          const stat = fs.statSync(filePath);
+          if (stat.isFile()) {
+            fs.unlinkSync(filePath);
+            deletedCount++;
+          }
+        } catch (e) {
+          console.error(`Failed to delete file: ${f}`, e);
+        }
+      });
+    }
+
+    // Xóa tất cả records từ database
+    await db.Q('DELETE FROM file_uploads');
+
+    addAccessLog('admin', 'admin', `Xóa toàn bộ minh chứng — ${deletedCount} file`, req, 'system', 'Minh chứng');
+    res.json({ success: true, deleted: deletedCount });
   } catch (error) { next(error); }
 });
 
@@ -1245,6 +1310,14 @@ router.get('/admin-api/ip-tracking', authenticateAdmin, (req, res) => {
   } catch (error: any) {
     res.json({ success: false, error: error.message });
   }
+});
+
+// Admin Students
+router.get('/admin-api/students', authenticateAdmin, async (req, res, next) => {
+  try {
+    const data = await db.getStudents();
+    res.json(data);
+  } catch (error) { next(error); }
 });
 
 // Unban IP
