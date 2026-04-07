@@ -4,7 +4,7 @@
  * Can use both local database (faster) and HTTP API (for consistency)
  */
 
-const API_BASE = process.env.API_BASE || 'http://localhost:3004';
+const API_BASE = process.env.API_BASE || '';
 const API_KEY = process.env.API_KEY || '';
 
 export interface ApiClientOptions {

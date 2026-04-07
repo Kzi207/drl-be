@@ -131,6 +131,34 @@ export async function withTx<T>(fn: (c: PoolConnection) => Promise<T>): Promise<
   finally { c.release(); }
 }
 
+function defaultPasswordFromStudentId(studentId: string): string {
+  const id = String(studentId || '').trim();
+  if (!id) return '000';
+
+  const digits = id.replace(/\D/g, '');
+  if (digits.length >= 3) return digits.slice(-3).padStart(3, '0');
+  return id.slice(-3).padStart(3, '0');
+}
+
+async function ensureStudentUserAccountTx(c: PoolConnection, s: Student): Promise<void> {
+  const username = String(s.id || '').trim();
+  if (!username) return;
+
+  const password = defaultPasswordFromStudentId(username);
+  const name = `${String(s.lastName || '').trim()} ${String(s.firstName || '').trim()}`.trim() || username;
+  const classId = s.classId ? String(s.classId).trim() : null;
+
+  // Do not overwrite passwords. If the user already exists, update only name/class for student role.
+  await c.execute(
+    `INSERT INTO users (username, password, name, role, class_id)
+     VALUES (?, ?, ?, 'student', ?)
+     ON DUPLICATE KEY UPDATE
+       name = IF(role='student', VALUES(name), name),
+       class_id = IF(role='student', VALUES(class_id), class_id)`,
+    [username, password, name, classId]
+  );
+}
+
 // === MAPPERS ===
 const map = {
   student: (r: any): Student => ({ id: r.id, lastName: r.last_name, firstName: r.first_name, dob: r.dob || '', classId: r.class_id || '', email: r.email }),
@@ -156,7 +184,13 @@ export const deleteClass = async (id: string) => withTx(async c => { await c.exe
 // Students
 export const getStudents = async (classId?: string) => ((await Q(classId ? 'SELECT * FROM students WHERE class_id=? ORDER BY last_name' : 'SELECT * FROM students ORDER BY last_name', classId ? [classId] : [])) as any[]).map(map.student);
 export const getStudentById = async (id: string) => { const r = await Q('SELECT * FROM students WHERE id=?', [id]); return (r as any[])[0] ? map.student((r as any[])[0]) : null; };
-export const createStudent = async (s: Student) => Q('INSERT INTO students (id,last_name,first_name,dob,class_id,email) VALUES (?,?,?,?,?,?)', [s.id, s.lastName, s.firstName, s.dob, s.classId, s.email || null]);
+export const createStudent = async (s: Student) => withTx(async (c) => {
+  await c.execute(
+    'INSERT INTO students (id,last_name,first_name,dob,class_id,email) VALUES (?,?,?,?,?,?)',
+    [s.id, s.lastName, s.firstName, s.dob, s.classId, s.email || null]
+  );
+  await ensureStudentUserAccountTx(c, s);
+});
 export const updateStudent = async (s: Partial<Student> & { id: string }) => {
   const u: string[] = [], v: any[] = [];
   if (s.lastName !== undefined) { u.push('last_name=?'); v.push(s.lastName); }
@@ -167,7 +201,19 @@ export const updateStudent = async (s: Partial<Student> & { id: string }) => {
   if (u.length) await Q(`UPDATE students SET ${u.join(',')} WHERE id=?`, [...v, s.id]);
 };
 export const deleteStudent = async (id: string) => Q('DELETE FROM students WHERE id=?', [id]);
-export const importStudents = async (list: Student[]) => { if (!list.length) return; await withTx(async c => { for (const s of list) await c.execute('INSERT INTO students (id,last_name,first_name,dob,class_id,email) VALUES (?,?,?,?,?,?) ON DUPLICATE KEY UPDATE last_name=VALUES(last_name),first_name=VALUES(first_name),dob=VALUES(dob),class_id=VALUES(class_id),email=VALUES(email)', [s.id, s.lastName, s.firstName, s.dob, s.classId, s.email || null]); }); };
+export const importStudents = async (list: Student[]) => {
+  if (!list.length) return;
+  await withTx(async (c) => {
+    for (const s of list) {
+      await c.execute(
+        'INSERT INTO students (id,last_name,first_name,dob,class_id,email) VALUES (?,?,?,?,?,?) '
+        + 'ON DUPLICATE KEY UPDATE last_name=VALUES(last_name),first_name=VALUES(first_name),dob=VALUES(dob),class_id=VALUES(class_id),email=VALUES(email)',
+        [s.id, s.lastName, s.firstName, s.dob, s.classId, s.email || null]
+      );
+      await ensureStudentUserAccountTx(c, s);
+    }
+  });
+};
 
 // Users
 export const getUsers = async () => ((await Q('SELECT * FROM users ORDER BY name')) as any[]).map(map.user);
