@@ -77,7 +77,10 @@ export interface DRLScore {
   classScore: number;
   finalScore: number;
   details: unknown;
-  status: 'draft' | 'submitted' | 'class_approved' | 'bch_approved' | 'finalized';
+  status: 'submitted' | 'approved' | 'finalized';
+  completedAt?: string | null;
+  returnedAt?: string | null;
+  updatedAt?: string | null;
 }
 
 export interface FileUpload {
@@ -87,6 +90,17 @@ export interface FileUpload {
   fileName: string;
   filePath: string;
   fileUrl?: string;
+}
+
+export interface TrangThai {
+  studentId: string;
+  semester: string;
+  daNop: boolean;
+  daHoanTat: boolean;
+  daNopAt?: string | null;
+  daHoanTatAt?: string | null;
+  lastStatus?: string | null;
+  updatedAt?: string | null;
 }
 
 // Re-export types
@@ -127,7 +141,7 @@ const map = {
   grade: (r: any): SubjectGrade => ({ id: r.id, studentId: r.student_id, subjectId: r.subject_id, midtermScore: r.midterm_score != null ? +r.midterm_score : undefined, finalScore: r.final_score != null ? +r.final_score : undefined }),
   user: (r: any): User => ({ username: r.username, password: r.password, name: r.name, role: r.role, classId: r.class_id, email: r.email }),
   period: (r: any): GradingPeriod => ({ id: r.id, name: r.name, startDate: r.start_date, endDate: r.end_date, isDefault: r.is_default === 1 }),
-  drl: (r: any): DRLScore => ({ id: r.id, studentId: r.student_id, semester: r.semester, selfScore: +r.self_score || 0, classScore: +r.class_score || 0, finalScore: +r.final_score || 0, details: typeof r.details === 'string' ? JSON.parse(r.details) : r.details, status: r.status }),
+  drl: (r: any): DRLScore => ({ id: r.id, studentId: r.student_id, semester: r.semester, selfScore: +r.self_score || 0, classScore: +r.class_score || 0, finalScore: +r.final_score || 0, details: typeof r.details === 'string' ? JSON.parse(r.details) : r.details, status: r.status, completedAt: r.completed_at || null, returnedAt: r.returned_at || null, updatedAt: r.updated_at || null }),
   upload: (r: any): FileUpload => ({ id: r.id, studentId: r.student_id, category: r.category, fileName: r.file_name, filePath: r.file_path, fileUrl: r.file_url }),
 };
 
@@ -236,13 +250,108 @@ export const deleteGradingPeriod = async (id: string) => Q('DELETE FROM grading_
 
 // DRL Scores
 export const getDRLScores = async () => ((await Q('SELECT * FROM drl_scores ORDER BY student_id,semester')) as any[]).map(map.drl);
-export const saveDRLScore = async (d: DRLScore) => Q('INSERT INTO drl_scores (id,student_id,semester,self_score,class_score,final_score,details,status) VALUES (?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE self_score=VALUES(self_score),class_score=VALUES(class_score),final_score=VALUES(final_score),details=VALUES(details),status=VALUES(status)', [d.id, d.studentId, d.semester, d.selfScore, d.classScore, d.finalScore, JSON.stringify(d.details), d.status]);
+export const saveDRLScore = async (d: DRLScore) => {
+  // `details` is stored in a JSON column. If client already sends a JSON string,
+  // do NOT JSON.stringify again (it would become a JSON string literal and break parsing).
+  const detailsJson = typeof d.details === 'string' ? d.details : JSON.stringify(d.details);
+
+  return Q(
+    'INSERT INTO drl_scores (id,student_id,semester,self_score,class_score,final_score,details,status,completed_at,returned_at) VALUES (?,?,?,?,?,?,?,?,?,?) '
+    + 'ON DUPLICATE KEY UPDATE self_score=VALUES(self_score),class_score=VALUES(class_score),final_score=VALUES(final_score),details=VALUES(details),status=VALUES(status),completed_at=IF(VALUES(status)="finalized",NOW(),completed_at)',
+    [d.id, d.studentId, d.semester, d.selfScore, d.classScore, d.finalScore, detailsJson, d.status, d.status === 'finalized' ? new Date() : null, d.returnedAt || null]
+  );
+};
 
 // File Uploads
 export const saveFileUpload = async (f: FileUpload) => { const r = await Q('INSERT INTO file_uploads (student_id,category,file_name,file_path,file_url) VALUES (?,?,?,?,?)', [f.studentId, f.category, f.fileName, f.filePath, f.fileUrl || null]); return r.insertId; };
 export const getFileUpload = async (stuId: string, cat: string) => { const r = await Q('SELECT * FROM file_uploads WHERE student_id=? AND category=? ORDER BY created_at DESC LIMIT 1', [stuId, cat]); return (r as any[])[0] ? map.upload((r as any[])[0]) : null; };
 export const getFileUploadsByStudent = async (stuId: string) => ((await Q('SELECT * FROM file_uploads WHERE student_id=? ORDER BY created_at ASC', [stuId])) as any[]).map(map.upload);
 export const deleteFileUploads = async (stuId: string, cat: string) => Q('DELETE FROM file_uploads WHERE student_id=? AND category=?', [stuId, cat]);
+
+// Trang Thai (for dashboard statistics)
+export const upsertTrangThai = async (p: {
+  studentId: string;
+  semester: string;
+  daNop: boolean;
+  daHoanTat: boolean;
+  lastStatus?: string | null;
+  daNopAt?: Date | null;
+  daHoanTatAt?: Date | null;
+}) => {
+  const daNop = p.daNop ? 1 : 0;
+  const daHoanTat = p.daHoanTat ? 1 : 0;
+
+  return Q(
+    `INSERT INTO trang_thai (
+      student_id, semester,
+      da_nop, da_hoan_tat,
+      da_nop_at, da_hoan_tat_at,
+      last_status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE
+      da_nop = GREATEST(da_nop, VALUES(da_nop)),
+      da_hoan_tat = GREATEST(da_hoan_tat, VALUES(da_hoan_tat)),
+      da_nop_at = IF(da_nop_at IS NULL AND VALUES(da_nop)=1, COALESCE(VALUES(da_nop_at), NOW()), da_nop_at),
+      da_hoan_tat_at = IF(da_hoan_tat_at IS NULL AND VALUES(da_hoan_tat)=1, COALESCE(VALUES(da_hoan_tat_at), NOW()), da_hoan_tat_at),
+      last_status = VALUES(last_status)`,
+    [
+      p.studentId,
+      p.semester,
+      daNop,
+      daHoanTat,
+      daNop ? (p.daNopAt || new Date()) : null,
+      daHoanTat ? (p.daHoanTatAt || new Date()) : null,
+      p.lastStatus ?? null,
+    ]
+  );
+};
+
+export const getTrangThaiSummary = async (semester?: string) => {
+  if (semester) {
+    const r = await Q(
+      `SELECT semester,
+              COUNT(*) AS total,
+              SUM(da_nop) AS daNop,
+              SUM(da_hoan_tat) AS daHoanTat
+       FROM trang_thai
+       WHERE semester = ?
+       GROUP BY semester`,
+      [semester]
+    );
+    return (r as any[])[0] || { semester, total: 0, daNop: 0, daHoanTat: 0 };
+  }
+
+  return Q(
+    `SELECT semester,
+            COUNT(*) AS total,
+            SUM(da_nop) AS daNop,
+            SUM(da_hoan_tat) AS daHoanTat
+     FROM trang_thai
+     GROUP BY semester
+     ORDER BY semester DESC`
+  );
+};
+
+export const getTrangThaiByClass = async (semester: string) => {
+  // Count totals per class from students table, and submission/completion from trang_thai.
+  // Students without a trang_thai row are treated as not submitted.
+  return Q(
+    `SELECT
+        c.id AS classId,
+        c.name AS className,
+        COUNT(s.id) AS totalStudents,
+        SUM(COALESCE(t.da_nop, 0)) AS submittedCount,
+        SUM(COALESCE(t.da_hoan_tat, 0)) AS completedCount
+     FROM classes c
+     JOIN students s ON s.class_id = c.id
+     LEFT JOIN trang_thai t
+       ON t.student_id = s.id
+      AND t.semester = ?
+     GROUP BY c.id, c.name
+     ORDER BY c.id`,
+    [semester]
+  );
+};
 
 // Stats
 export const getAttendanceStats = async (actId: string) => {
@@ -263,7 +372,8 @@ CREATE TABLE IF NOT EXISTS gpa_subjects(id VARCHAR(50) PRIMARY KEY,name VARCHAR(
 CREATE TABLE IF NOT EXISTS activities(id VARCHAR(100) PRIMARY KEY,name VARCHAR(255) NOT NULL,date_time DATETIME NOT NULL,subject_id VARCHAR(50) NOT NULL,class_id VARCHAR(50) NOT NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,INDEX(subject_id),INDEX(class_id));
 CREATE TABLE IF NOT EXISTS attendance(id VARCHAR(150) PRIMARY KEY,activity_id VARCHAR(100) NOT NULL,student_id VARCHAR(50) NOT NULL,timestamp DATETIME NOT NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,UNIQUE KEY(activity_id,student_id),INDEX(student_id));
 CREATE TABLE IF NOT EXISTS grades(id VARCHAR(150) PRIMARY KEY,student_id VARCHAR(50) NOT NULL,subject_id VARCHAR(50) NOT NULL,midterm_score DECIMAL(4,2),final_score DECIMAL(4,2),created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,UNIQUE KEY(student_id,subject_id));
-CREATE TABLE IF NOT EXISTS drl_scores(id VARCHAR(150) PRIMARY KEY,student_id VARCHAR(50) NOT NULL,semester VARCHAR(50) NOT NULL,self_score DECIMAL(5,2) DEFAULT 0,class_score DECIMAL(5,2) DEFAULT 0,bch_score DECIMAL(5,2) DEFAULT 0,faculty_score DECIMAL(5,2) DEFAULT 0,final_score DECIMAL(5,2) DEFAULT 0,details JSON,status ENUM('draft','submitted','class_approved','bch_approved','finalized') DEFAULT 'draft',created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,UNIQUE KEY(student_id,semester));
+CREATE TABLE IF NOT EXISTS drl_scores(id VARCHAR(150) PRIMARY KEY,student_id VARCHAR(50) NOT NULL,semester VARCHAR(50) NOT NULL,self_score DECIMAL(5,2) DEFAULT 0,class_score DECIMAL(5,2) DEFAULT 0,final_score DECIMAL(5,2) DEFAULT 0,details JSON,status ENUM('draft','submitted','class_approved','bch_approved','approved','finalized') DEFAULT 'draft',completed_at TIMESTAMP NULL,returned_at TIMESTAMP NULL,created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,UNIQUE KEY(student_id,semester));
+CREATE TABLE IF NOT EXISTS trang_thai(student_id VARCHAR(50) NOT NULL,semester VARCHAR(50) NOT NULL,da_nop TINYINT(1) DEFAULT 0,da_hoan_tat TINYINT(1) DEFAULT 0,da_nop_at TIMESTAMP NULL,da_hoan_tat_at TIMESTAMP NULL,last_status VARCHAR(50),created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,PRIMARY KEY(student_id,semester),INDEX(semester),INDEX(da_nop),INDEX(da_hoan_tat));
 CREATE TABLE IF NOT EXISTS file_uploads(id INT AUTO_INCREMENT PRIMARY KEY,student_id VARCHAR(50),category VARCHAR(100),file_name VARCHAR(255) NOT NULL,file_path VARCHAR(500) NOT NULL,file_url VARCHAR(500),created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,INDEX(student_id));
 `;
 

@@ -321,16 +321,18 @@ CREATE TABLE IF NOT EXISTS \`drl_scores\` (
   \`semester\` VARCHAR(50) NOT NULL,
   \`self_score\` DECIMAL(5,2) DEFAULT 0,
   \`class_score\` DECIMAL(5,2) DEFAULT 0,
-  \`bch_score\` DECIMAL(5,2) DEFAULT 0,
-  \`faculty_score\` DECIMAL(5,2) DEFAULT 0,
   \`final_score\` DECIMAL(5,2) DEFAULT 0,
   \`details\` JSON DEFAULT NULL,
-  \`status\` ENUM('draft', 'submitted', 'class_approved', 'bch_approved', 'finalized') DEFAULT 'draft',
+  \`status\` ENUM('submitted', 'approved', 'finalized') DEFAULT 'submitted',
+  \`completed_at\` TIMESTAMP NULL,
+  \`returned_at\` TIMESTAMP NULL,
   \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (\`id\`),
+  UNIQUE KEY \`uk_drl_student_semester\` (\`student_id\`, \`semester\`),
   INDEX \`idx_drl_student_id\` (\`student_id\`),
-  INDEX \`idx_drl_semester\` (\`semester\`)
+  INDEX \`idx_drl_semester\` (\`semester\`),
+  INDEX \`idx_drl_status\` (\`status\`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS \`file_uploads\` (

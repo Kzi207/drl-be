@@ -61,7 +61,8 @@ export interface User {
   email?: string;
 }
 
-export type DRLStatus = 'draft' | 'submitted' | 'class_approved' | 'bch_approved' | 'finalized';
+export type DRLStatus = 'submitted' | 'approved' | 'finalized';
+export type DRLStatusInternal = DRLStatus | 'not_submitted'; // Internal tracking
 
 export interface GradingPeriod {
   id: string;
@@ -80,6 +81,9 @@ export interface DRLScore {
   finalScore: number;
   details: unknown;
   status: DRLStatus;
+  completedAt?: string | null;
+  returnedAt?: string | null;
+  updatedAt?: string | null;
 }
 
 export interface FileUpload {

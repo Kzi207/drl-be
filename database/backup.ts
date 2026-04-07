@@ -21,7 +21,7 @@ type GoogleSheetResult = {
 };
 
 // Các bảng cần backup (theo thứ tự để tránh foreign key)
-const TABLES = ['users', 'classes', 'students', 'subjects', 'activities', 'attendance', 'grading_periods', 'drl_scores', 'grades'];
+const TABLES = ['users', 'classes', 'students', 'subjects', 'activities', 'attendance', 'grading_periods', 'drl_scores', 'trang_thai', 'grades'];
 
 const ensureDir = () => {
   if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });

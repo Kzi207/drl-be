@@ -248,6 +248,12 @@ const authenticateAdmin = (req: Request, res: Response, next: NextFunction) => {
 // MIDDLEWARE XÁC THỰC API KEY
 // =====================================================
 const authenticateApiKey = (req: Request, res: Response, next: NextFunction) => {
+  // If API_KEY is not configured on the backend, skip API key auth.
+  // This prevents a misconfigured environment (API_KEY='') from blocking all requests.
+  if (!API_KEY) {
+    return next();
+  }
+
   // Bỏ qua xác thực cho file tĩnh, trạng thái, đăng nhập, config và các endpoint admin/backup
   if (req.path.startsWith('/uploads') ||
     req.path.startsWith('/img') ||
@@ -265,7 +271,7 @@ const authenticateApiKey = (req: Request, res: Response, next: NextFunction) => 
     console.warn(`[AUTH FAIL] Missing API Key | IP: ${req.ip} | Path: ${req.path}`);
     return res.status(401).json({ 
       error: 'Unauthorized', 
-      message: 'Missing API Key. Please check your configuration.' 
+      message: 'Missing API Key. Please provide header x-api-key.'
     });
   }
 
@@ -273,7 +279,7 @@ const authenticateApiKey = (req: Request, res: Response, next: NextFunction) => 
     console.warn(`[AUTH FAIL] Invalid API Key | IP: ${req.ip} | Path: ${req.path}`);
     return res.status(403).json({ 
       error: 'Forbidden', 
-      message: 'Invalid API Key' 
+      message: 'Invalid API Key. Please check backend API_KEY and frontend VITE_API_KEY match.'
     });
   }
 
@@ -631,10 +637,173 @@ router.get('/drl_scores', async (req, res, next) => {
 
 router.post('/drl_scores', async (req, res, next) => {
   try {
-    await db.saveDRLScore(req.body);
-    const id = req.body?.student_id || req.body?.studentId || '';
-    addAccessLog('admin', 'admin', `Lưu điểm rèn luyện${id ? ': SV ' + id : ''}`, req, 'drl', 'Điểm Rèn Luyện');
-    res.json({ success: true });
+    const body = req.body;
+    
+    // Auto-generate ID if not provided or empty
+    if (!body.id || body.id.trim() === '') {
+      body.id = `drl_${body.studentId}_${body.semester}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`.substring(0, 100);
+    }
+    
+    // Validate student exists before inserting score
+    const studentCheck = await db.Q(
+      'SELECT id FROM students WHERE id = ? LIMIT 1',
+      [body.studentId]
+    );
+    
+    if (!studentCheck || studentCheck.length === 0) {
+      console.error('[POST /drl_scores] Student not found:', body.studentId);
+      return res.status(404).json({ 
+        error: `Sinh viên không tồn tại: ${body.studentId}. Vui lòng kiểm tra ID sinh viên.`
+      });
+    }
+    
+    // Validate grading period exists
+    const periodCheck = await db.Q(
+      'SELECT id FROM grading_periods WHERE id = ? LIMIT 1',
+      [body.semester]
+    );
+    
+    if (!periodCheck || periodCheck.length === 0) {
+      // Get available periods to suggest in error
+      const availablePeriods = await db.Q(
+        'SELECT id, name FROM grading_periods ORDER BY id DESC'
+      );
+      const periodList = (availablePeriods as any[]).map(p => `${p.id} (${p.name})`).join(', ') || 'Không có';
+      
+      console.error('[POST /drl_scores] Grading period not found:', body.semester);
+      console.error('[POST /drl_scores] Available periods:', periodList);
+      
+      return res.status(404).json({ 
+        error: `Kỳ học không tồn tại: "${body.semester}"\n\nKỳ học có sẵn: ${periodList || 'Chưa thiết lập'}`,
+        availablePeriods: (availablePeriods as any[]).map(p => ({ id: p.id, name: p.name }))
+      });
+    }
+    
+    console.log('[POST /drl_scores] Saving:', JSON.stringify({
+      id: body.id,
+      studentId: body.studentId,
+      semester: body.semester,
+      status: body.status
+    }));
+    
+    await db.saveDRLScore(body);
+
+    // Update submission/completion status for dashboard statistics
+    try {
+      const status = String(body.status || '').trim();
+      const isSubmitted = status === 'submitted' || status === 'class_approved' || status === 'bch_approved' || status === 'approved' || status === 'finalized';
+      const isCompleted = status === 'finalized';
+
+      if (body.studentId && body.semester && (isSubmitted || isCompleted)) {
+        await db.upsertTrangThai({
+          studentId: body.studentId,
+          semester: body.semester,
+          daNop: isSubmitted,
+          daHoanTat: isCompleted,
+          lastStatus: status || null,
+          daNopAt: isSubmitted ? new Date() : null,
+          daHoanTatAt: isCompleted ? new Date() : null,
+        });
+      }
+    } catch (e: any) {
+      // Non-blocking: do not fail DRL saving if statistics table isn't migrated yet
+      console.warn('[POST /drl_scores] Warning: cannot update trang_thai:', e?.message || e);
+    }
+    
+    // Return the saved score data - try exact ID first, then fallback to student_id + semester
+    let savedScore = await db.Q(
+      'SELECT * FROM drl_scores WHERE id = ? LIMIT 1',
+      [body.id]
+    );
+    
+    // Fallback if not found
+    if (!savedScore || savedScore.length === 0) {
+      console.warn('[POST /drl_scores] ID query returned empty, trying student_id+semester fallback');
+      savedScore = await db.Q(
+        'SELECT * FROM drl_scores WHERE student_id = ? AND semester = ? ORDER BY created_at DESC LIMIT 1',
+        [body.studentId, body.semester]
+      );
+    }
+    
+    console.log('[POST /drl_scores] Final query result count:', savedScore ? savedScore.length : 0);
+    if (savedScore && savedScore.length > 0) {
+      console.log('[POST /drl_scores] Found record:', {
+        id: savedScore[0].id,
+        studentId: savedScore[0].student_id,
+        status: savedScore[0].status
+      });
+    }
+    
+    const studentId = body?.studentId || body?.student_id || '';
+    addAccessLog('admin', 'admin', `Lưu điểm rèn luyện${studentId ? ': SV ' + studentId : ''}`, req, 'drl', 'Điểm Rèn Luyện');
+    
+    if (savedScore && savedScore.length > 0) {
+      // Convert DB field names to camelCase
+      const score = savedScore[0];
+
+      // MySQL JSON fields can come back as string/object (or Buffer depending on driver settings).
+      // Ensure frontend receives a real object or a single-level JSON string.
+      let normalizedDetails: any = score.details;
+      try {
+        if (Buffer.isBuffer(normalizedDetails)) {
+          normalizedDetails = normalizedDetails.toString('utf8');
+        }
+
+        // If it's a string, attempt to parse. Some legacy writes stored a JSON string
+        // literal inside the JSON column (double-encoded). Unwrap at most twice.
+        if (typeof normalizedDetails === 'string') {
+          let parsed: any = normalizedDetails;
+          for (let i = 0; i < 2; i++) {
+            if (typeof parsed === 'string') {
+              try {
+                parsed = JSON.parse(parsed);
+              } catch {
+                break;
+              }
+            }
+          }
+          normalizedDetails = parsed;
+        }
+      } catch (e) {
+        console.warn('[POST /drl_scores] Returned details could not be normalized; falling back to request body.details');
+        normalizedDetails = body.details;
+      }
+
+      res.json({
+        id: score.id,
+        studentId: score.student_id,
+        semester: score.semester,
+        selfScore: Number(score.self_score) || 0,
+        classScore: Number(score.class_score) || 0,
+        finalScore: Number(score.final_score) || 0,
+        details: normalizedDetails,
+        status: score.status,
+        completedAt: score.completed_at,
+        returnedAt: score.returned_at,
+        updatedAt: score.updated_at
+      });
+    } else {
+      console.warn('[POST /drl_scores] NO DATA FOUND after INSERT!');
+      res.json({ success: true, ...body });
+    }
+  } catch (error) { next(error); }
+});
+
+// --- TRẠNG THÁI (PHỤC VỤ THỐNG KÊ TỔNG QUAN) ---
+router.get('/trang_thai/summary', async (req, res, next) => {
+  try {
+    const semester = (req.query.semester as string) || undefined;
+    const data = await db.getTrangThaiSummary(semester);
+    res.json(data);
+  } catch (error) { next(error); }
+});
+
+router.get('/trang_thai/by_class', async (req, res, next) => {
+  try {
+    const semester = String(req.query.semester || '').trim();
+    if (!semester) return res.status(400).json({ error: 'Missing semester' });
+    const data = await db.getTrangThaiByClass(semester);
+    res.json(data);
   } catch (error) { next(error); }
 });
 
@@ -654,12 +823,16 @@ router.post('/upload', async (req, res, next) => {
     const ext = path.extname(fileName);
     let uniqueName: string;
 
+    // Date.now() alone can collide when multiple uploads happen quickly (localhost).
+    // Add a random suffix to guarantee uniqueness.
+    const uniqueSuffix = crypto.randomBytes(6).toString('hex');
+
     if (studentId && category) {
       const safeId = String(studentId).replace(/[^a-zA-Z0-9]/g, '');
       const safeCat = String(category).replace(/\./g, '-').replace(/[^a-zA-Z0-9\-]/g, '');
-      uniqueName = `${safeId}_${safeCat}_${Date.now()}${ext}`;
+      uniqueName = `${safeId}_${safeCat}_${Date.now()}_${uniqueSuffix}${ext}`;
     } else {
-      uniqueName = `${Date.now()}_${path.basename(fileName, ext)}${ext}`;
+      uniqueName = `${Date.now()}_${uniqueSuffix}_${path.basename(fileName, ext)}${ext}`;
     }
 
     const filePath = path.join(UPLOAD_DIR, uniqueName);
@@ -743,6 +916,84 @@ router.post('/api/delete-proof', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// --- XÓA MINH CHỨNG (DELETE METHOD) ---
+// Support both /delete-proof và /api/delete-proof
+router.delete('/delete-proof', async (req, res, next) => {
+  try {
+    const tk_sv = req.body?.tk_sv || req.query?.tk_sv || req.body?.studentId || req.query?.studentId;
+    const muc_danh_gia = req.body?.muc_danh_gia || req.query?.muc_danh_gia || req.body?.category || req.query?.category;
+
+    if (!tk_sv || !muc_danh_gia) {
+      return res.status(400).json({ error: 'Thiếu thông tin (tk_sv hoặc muc_danh_gia)' });
+    }
+
+    const safeId = String(tk_sv).replace(/[^a-zA-Z0-9]/g, '');
+    const safeCat = String(muc_danh_gia).replace(/\./g, '-').replace(/[^a-zA-Z0-9\-]/g, '');
+    const prefix = `${safeId}_${safeCat}_`;
+
+    // Xóa khỏi hệ thống file
+    let deletedCount = 0;
+    if (fs.existsSync(UPLOAD_DIR)) {
+      const files = fs.readdirSync(UPLOAD_DIR);
+      files.filter(f => f.startsWith(prefix)).forEach(f => {
+        try {
+          fs.unlinkSync(path.join(UPLOAD_DIR, f));
+          deletedCount++;
+        } catch (e) {
+          console.error(`Failed to delete file: ${f}`, e);
+        }
+      });
+    }
+
+    // Xóa khỏi cơ sở dữ liệu (tương thích cả category dạng III.1 và III-1)
+    const rawCat = String(muc_danh_gia);
+    await db.Q(
+      'DELETE FROM file_uploads WHERE student_id=? AND (category=? OR category=?)',
+      [safeId, rawCat, safeCat]
+    );
+
+    res.json({ success: true, deleted: deletedCount, message: `Deleted ${deletedCount} file(s)` });
+  } catch (error) { next(error); }
+});
+
+router.delete('/api/delete-proof', async (req, res, next) => {
+  try {
+    const tk_sv = req.body?.tk_sv || req.query?.tk_sv || req.body?.studentId || req.query?.studentId;
+    const muc_danh_gia = req.body?.muc_danh_gia || req.query?.muc_danh_gia || req.body?.category || req.query?.category;
+
+    if (!tk_sv || !muc_danh_gia) {
+      return res.status(400).json({ error: 'Thiếu thông tin (tk_sv hoặc muc_danh_gia)' });
+    }
+
+    const safeId = String(tk_sv).replace(/[^a-zA-Z0-9]/g, '');
+    const safeCat = String(muc_danh_gia).replace(/\./g, '-').replace(/[^a-zA-Z0-9\-]/g, '');
+    const prefix = `${safeId}_${safeCat}_`;
+
+    // Xóa khỏi hệ thống file
+    let deletedCount = 0;
+    if (fs.existsSync(UPLOAD_DIR)) {
+      const files = fs.readdirSync(UPLOAD_DIR);
+      files.filter(f => f.startsWith(prefix)).forEach(f => {
+        try {
+          fs.unlinkSync(path.join(UPLOAD_DIR, f));
+          deletedCount++;
+        } catch (e) {
+          console.error(`Failed to delete file: ${f}`, e);
+        }
+      });
+    }
+
+    // Xóa khỏi cơ sở dữ liệu (tương thích cả category dạng III.1 và III-1)
+    const rawCat = String(muc_danh_gia);
+    await db.Q(
+      'DELETE FROM file_uploads WHERE student_id=? AND (category=? OR category=?)',
+      [safeId, rawCat, safeCat]
+    );
+
+    res.json({ success: true, deleted: deletedCount, message: `Deleted ${deletedCount} file(s)` });
+  } catch (error) { next(error); }
+});
+
 // --- LẤY ẢNH MINH CHỨNG ---
 router.get('/api/get-proof', async (req, res, next) => {
   try {
@@ -810,7 +1061,10 @@ router.get('/api/get-proofs', async (req, res, next) => {
       return typeof u?.fileUrl === 'string' ? u.fileUrl : '';
     };
 
-    // 1) Nguon tu DB
+    // Track all processed files to avoid duplicates
+    const processedUrls = new Set<string>();
+
+    // 1) Primary source: Database (file_uploads table)
     uploads.forEach((u: any) => {
       if (!u?.category) return;
 
@@ -819,12 +1073,14 @@ router.get('/api/get-proofs', async (req, res, next) => {
 
       if (!url) return;
       if (!proofsByCategory[category]) proofsByCategory[category] = [];
-      if (!proofsByCategory[category].includes(url)) {
+      if (!processedUrls.has(url)) {
         proofsByCategory[category].push(url);
+        processedUrls.add(url);
       }
     });
 
-    // 2) Fallback tu he thong file de tuong thich du lieu cu
+    // 2) Fallback from filesystem (for old data without DB records)
+    // Only add files that are NOT already in the database
     const filePrefix = `${safeId}_`;
     const files = fs.existsSync(UPLOAD_DIR)
       ? fs.readdirSync(UPLOAD_DIR).filter((f) => f.startsWith(filePrefix))
@@ -840,10 +1096,12 @@ router.get('/api/get-proofs', async (req, res, next) => {
       const category = safeCategory.replace(/-/g, '.');
       const url = `${getBaseUrl(req)}/img/${encodeURIComponent(fileName)}`;
 
+      // Skip if already added from database
+      if (processedUrls.has(url)) return;
+
       if (!proofsByCategory[category]) proofsByCategory[category] = [];
-      if (!proofsByCategory[category].includes(url)) {
-        proofsByCategory[category].push(url);
-      }
+      proofsByCategory[category].push(url);
+      processedUrls.add(url);
     });
 
     // Sap xep de hien thi on dinh
@@ -947,7 +1205,9 @@ router.delete('/admin-api/proofs/delete-all', authenticateAdmin, async (req, res
 // =====================================================
 router.post('/login', async (req, res) => {
   try {
-    const { username, password } = req.body;
+    const username = String(req.body?.username ?? '').trim();
+    const password = String(req.body?.password ?? '').trim();
+
     if (!username || !password) {
       return res.status(400).json({ error: 'Missing username or password' });
     }

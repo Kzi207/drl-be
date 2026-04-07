@@ -13,6 +13,9 @@
     "build:db": "node -r ./ts-register.js database/auto-migrate.ts",
     "migrate": "node -r ./ts-register.js database/migrate.ts",
     "migrate:safe": "node -r ./ts-register.js database/migrate-safe.ts",
+    "migrate:trang-thai": "node -r ./ts-register.js database/add-trang-thai.ts",
+    "migrate:drl-columns": "node -r ./ts-register.js database/add-drl-columns.ts",
+    "seed:student-users": "node -r ./ts-register.js database/seed-student-users.ts",
     "backup": "node -r ./ts-register.js database/backup.ts now",
     "backup:list": "node -r ./ts-register.js database/backup.ts list",
     "backup:restore": "node -r ./ts-register.js database/backup.ts restore"

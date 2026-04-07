@@ -189,8 +189,10 @@ CREATE TABLE IF NOT EXISTS `drl_scores` (
   `class_score` DECIMAL(5,2) DEFAULT 0 COMMENT 'Điểm lớp đánh giá',
   `final_score` DECIMAL(5,2) DEFAULT 0 COMMENT 'Điểm cuối cùng',
   `details` JSON DEFAULT NULL COMMENT 'Chi tiết từng mục đánh giá',
-  `status` ENUM('draft', 'submitted', 'approved') 
+  `status` ENUM('draft', 'submitted', 'class_approved', 'bch_approved', 'approved', 'finalized')
     DEFAULT 'draft' COMMENT 'Trạng thái',
+  `completed_at` TIMESTAMP NULL COMMENT 'Thời gian hoàn tất',
+  `returned_at` TIMESTAMP NULL COMMENT 'Thời gian chuyên khoa duyệt',
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
@@ -199,6 +201,30 @@ CREATE TABLE IF NOT EXISTS `drl_scores` (
   INDEX `idx_drl_status` (`status`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='Điểm rèn luyện sinh viên';
+
+-- =====================================================
+-- 9.1. BẢNG TRANG_THAI (Trạng thái nộp/hoàn tất - phục vụ thống kê)
+-- =====================================================
+CREATE TABLE IF NOT EXISTS `trang_thai` (
+  `student_id` VARCHAR(50) NOT NULL COMMENT 'FK -> students.id (MSSV)',
+  `semester` VARCHAR(50) NOT NULL COMMENT 'FK -> grading_periods.id',
+  `da_nop` TINYINT(1) DEFAULT 0 COMMENT '1 = đã nộp phiếu',
+  `da_hoan_tat` TINYINT(1) DEFAULT 0 COMMENT '1 = đã hoàn tất (đã ra điểm)',
+  `da_nop_at` TIMESTAMP NULL COMMENT 'Thời điểm ghi nhận đã nộp',
+  `da_hoan_tat_at` TIMESTAMP NULL COMMENT 'Thời điểm ghi nhận đã hoàn tất',
+  `last_status` VARCHAR(50) DEFAULT NULL COMMENT 'Trạng thái DRL gần nhất',
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`student_id`, `semester`),
+  INDEX `idx_tt_semester` (`semester`),
+  INDEX `idx_tt_da_nop` (`da_nop`),
+  INDEX `idx_tt_da_hoan_tat` (`da_hoan_tat`),
+  CONSTRAINT `fk_tt_student` FOREIGN KEY (`student_id`)
+    REFERENCES `students`(`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_tt_semester` FOREIGN KEY (`semester`)
+    REFERENCES `grading_periods`(`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='Trạng thái nộp/hoàn tất phiếu điểm rèn luyện (thống kê)';
 
 -- =====================================================
 -- 10. BẢNG FILE_UPLOADS (Lưu thông tin file upload)

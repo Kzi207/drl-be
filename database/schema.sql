@@ -208,8 +208,10 @@ CREATE TABLE `drl_scores` (
   `class_score` DECIMAL(5,2) DEFAULT 0 COMMENT 'Điểm lớp đánh giá',
   `final_score` DECIMAL(5,2) DEFAULT 0 COMMENT 'Điểm cuối cùng',
   `details` JSON DEFAULT NULL COMMENT 'Chi tiết từng mục đánh giá',
-  `status` ENUM('draft', 'submitted', 'approved') 
+  `status` ENUM('draft', 'submitted', 'class_approved', 'bch_approved', 'approved', 'finalized')
     DEFAULT 'draft' COMMENT 'Trạng thái',
+  `completed_at` TIMESTAMP NULL COMMENT 'Thời gian hoàn tất',
+  `returned_at` TIMESTAMP NULL COMMENT 'Thời gian chuyên khoa duyệt',
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
@@ -222,6 +224,31 @@ CREATE TABLE `drl_scores` (
     REFERENCES `grading_periods`(`id`) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 COMMENT='Điểm rèn luyện sinh viên';
+
+-- =====================================================
+-- 9.1. BẢNG TRANG_THAI (Trạng thái nộp/hoàn tất - phục vụ thống kê)
+-- =====================================================
+DROP TABLE IF EXISTS `trang_thai`;
+CREATE TABLE `trang_thai` (
+  `student_id` VARCHAR(50) NOT NULL COMMENT 'FK -> students.id (MSSV)',
+  `semester` VARCHAR(50) NOT NULL COMMENT 'FK -> grading_periods.id',
+  `da_nop` TINYINT(1) DEFAULT 0 COMMENT '1 = đã nộp phiếu',
+  `da_hoan_tat` TINYINT(1) DEFAULT 0 COMMENT '1 = đã hoàn tất (đã ra điểm)',
+  `da_nop_at` TIMESTAMP NULL COMMENT 'Thời điểm ghi nhận đã nộp',
+  `da_hoan_tat_at` TIMESTAMP NULL COMMENT 'Thời điểm ghi nhận đã hoàn tất',
+  `last_status` VARCHAR(50) DEFAULT NULL COMMENT 'Trạng thái DRL gần nhất',
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`student_id`, `semester`),
+  INDEX `idx_tt_semester` (`semester`),
+  INDEX `idx_tt_da_nop` (`da_nop`),
+  INDEX `idx_tt_da_hoan_tat` (`da_hoan_tat`),
+  CONSTRAINT `fk_tt_student` FOREIGN KEY (`student_id`)
+    REFERENCES `students`(`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `fk_tt_semester` FOREIGN KEY (`semester`)
+    REFERENCES `grading_periods`(`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+COMMENT='Trạng thái nộp/hoàn tất phiếu điểm rèn luyện (thống kê)';
 
 -- =====================================================
 -- 10. BẢNG FILE_UPLOADS (Lưu thông tin file upload)
@@ -241,11 +268,33 @@ CREATE TABLE `file_uploads` (
 COMMENT='Danh sách file upload minh chứng';
 
 -- =====================================================
--- INSERT DEFAULT ADMIN ACCOUNT
+-- INSERT DEFAULT DATA
 -- =====================================================
+
+-- 1. Insert test class
+INSERT INTO `classes` (`id`, `name`, `description`)
+VALUES ('K13-CNCD2511', 'Lớp K13 CNCD 25.11', 'Lớp Cơ Khí Động Lực khóa 2025')
+ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);
+
+-- 2. Insert test student
+INSERT INTO `students` (`id`, `last_name`, `first_name`, `class_id`, `dob`)
+VALUES ('CNCD2511016', 'Nguyễn', 'Văn A', 'K13-CNCD2511', '2005-01-15')
+ON DUPLICATE KEY UPDATE `class_id` = VALUES(`class_id`), `dob` = VALUES(`dob`);
+
+-- 3. Insert test grading period
+INSERT INTO `grading_periods` (`id`, `name`, `start_date`, `end_date`, `is_default`)
+VALUES ('HK2-2024-2025', 'Học Kỳ 2 Năm 2024-2025', '2025-01-01', '2025-05-31', 1)
+ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);
+
+-- 4. Insert admin user
 INSERT INTO `users` (`username`, `password`, `name`, `role`, `class_id`, `email`)
 VALUES ('admin', 'admin123', 'Quản Trị Viên', 'admin', NULL, NULL)
 ON DUPLICATE KEY UPDATE `name` = VALUES(`name`);
+
+-- 5. Insert test student user
+INSERT INTO `users` (`username`, `password`, `name`, `role`, `class_id`, `email`)
+VALUES ('CNCD2511016', '016', 'Nguyễn Văn A', 'student', 'K13-CNCD2511', NULL)
+ON DUPLICATE KEY UPDATE `name` = VALUES(`name`), `role` = VALUES(`role`);
 
 -- =====================================================
 -- VIEWS (Optional - For convenience)
