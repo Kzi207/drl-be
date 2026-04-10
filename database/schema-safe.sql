@@ -79,7 +79,7 @@ COMMENT='Tài khoản người dùng';
 -- 4. BẢNG GRADING_PERIODS (Học kỳ)
 -- =====================================================
 CREATE TABLE IF NOT EXISTS `grading_periods` (
-  `id` VARCHAR(50) NOT NULL COMMENT 'Mã học kỳ (VD: HK1_2024)',
+  `id` VARCHAR(50) NOT NULL COMMENT 'Mã học kỳ (VD: HK1_2025)',
   `name` VARCHAR(255) NOT NULL COMMENT 'Tên học kỳ',
   `start_date` DATE DEFAULT NULL COMMENT 'Ngày bắt đầu',
   `end_date` DATE DEFAULT NULL COMMENT 'Ngày kết thúc',

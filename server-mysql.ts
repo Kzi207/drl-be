@@ -657,9 +657,9 @@ router.post('/drl_scores', async (req, res, next) => {
       });
     }
     
-    // Validate grading period exists
+    // Validate grading period exists and get its details
     const periodCheck = await db.Q(
-      'SELECT id FROM grading_periods WHERE id = ? LIMIT 1',
+      'SELECT id, name, start_date, end_date FROM grading_periods WHERE id = ? LIMIT 1',
       [body.semester]
     );
     
@@ -677,6 +677,34 @@ router.post('/drl_scores', async (req, res, next) => {
         error: `Kỳ học không tồn tại: "${body.semester}"\n\nKỳ học có sẵn: ${periodList || 'Chưa thiết lập'}`,
         availablePeriods: (availablePeriods as any[]).map(p => ({ id: p.id, name: p.name }))
       });
+    }
+    
+    // Validate submission time window (only for 'submitted' status)
+    if (body.status === 'submitted') {
+      const period = periodCheck[0] as any;
+      const today = new Date();
+      const todayDate = today.toISOString().split('T')[0]; // YYYY-MM-DD format
+      
+      const startDate = period.start_date ? new Date(period.start_date).toISOString().split('T')[0] : null;
+      const endDate = period.end_date ? new Date(period.end_date).toISOString().split('T')[0] : null;
+      
+      console.log(`[POST /drl_scores] Time check - Today: ${todayDate}, Period: ${startDate} to ${endDate}`);
+      
+      if (startDate && todayDate < startDate) {
+        const startDateObj = new Date(startDate).toLocaleDateString('vi-VN');
+        return res.status(403).json({ 
+          error: `Chưa đến thời gian chấm.\n\nĐợt chấm "${period.name}" sẽ bắt đầu vào ngày ${startDateObj}.\n\nVui lòng chờ đến ngày dự định để nộp phiếu.`,
+          code: 'NOT_STARTED'
+        });
+      }
+      
+      if (endDate && todayDate > endDate) {
+        const endDateObj = new Date(endDate).toLocaleDateString('vi-VN');
+        return res.status(403).json({ 
+          error: `Đã hết hạn chấm.\n\nĐợt chấm "${period.name}" đã kết thúc vào ngày ${endDateObj}.\n\nVui lòng liên hệ quản trị viên nếu cần nộp muộn.`,
+          code: 'EXPIRED'
+        });
+      }
     }
     
     console.log('[POST /drl_scores] Saving:', JSON.stringify({
